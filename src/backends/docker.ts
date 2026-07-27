@@ -120,7 +120,7 @@ export async function runDockerBackend(
   const recipesOut = walks.map((walk) => ({
     filename: recipeFilename(walk.path),
     content: JSON.stringify(
-      lowerToConfiguration(walk.recipe, overlays.get(walk.path)),
+      lowerToConfiguration(walk.recipe, overlays.get(walk.path), walk.path),
       null,
       2,
     ) + '\n',

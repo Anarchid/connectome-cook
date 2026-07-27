@@ -61,6 +61,8 @@ Cook's walker resolves `fleet.children[].recipe` against the **parent recipe's d
 
 **For connectome-cook:** ship recipes that use bare filenames or `./<child>.json` for fleet children — both work identically under parent-dir resolution. Generated Dockerfile CMDs can stay `bun src/index.ts <parent-recipe>` from any CWD; child resolution no longer depends on it. The cook example at `examples/triumvirate/recipes/triumvirate.json` uses the `./<child>.json` form for clarity.
 
+**Flat-copy rewrite (issue #9):** backends copy every walked recipe flat into `<out>/recipes/`, so source layouts where children live in a different directory than the parent (`zkchar.json` + `recipes/commander.json`) used to break at runtime — the shipped parent's `./recipes/...` refs doubled the segment against its new location. Lowering now rewrites `fleet.children[].recipe` (and exact relative `allowedRecipes` entries) to `./<shipped filename>` via `rewriteFleetRefs` in `src/configuration.ts`, and `resolvePlan` fails fast when two walked recipes would flatten to the same filename.
+
 ## Reusable patterns
 
 ### Multi-stage Dockerfile shape

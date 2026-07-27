@@ -26,6 +26,7 @@ import type {
   WalkResult,
 } from './types.js';
 import { walkRecipe } from './walker.js';
+import { detectRecipeFilenameCollisions } from './configuration.js';
 import { detectSources } from './source-detector.js';
 import { detectExtensions } from './extension-detector.js';
 import { collectEnvVars } from './env-collector.js';
@@ -115,6 +116,22 @@ export async function resolvePlan(
   const parentWalk = walks[0];
   if (!parentWalk) {
     log.error('walker returned no recipes — internal error');
+    return { ok: false, exitCode: 2 };
+  }
+
+  // Every backend copies walked recipes flat into <out>/recipes/, so two
+  // sources sharing a shipped filename would silently overwrite each other
+  // (and the rewritten fleet child refs would point both children at the
+  // same file). Fail fast instead.
+  const collisions = detectRecipeFilenameCollisions(walks.map((w) => w.path));
+  if (collisions.size > 0) {
+    for (const [filename, paths] of collisions) {
+      log.error(
+        `recipe filename collision: ${paths.join(' and ')} would both be shipped ` +
+        `as recipes/${filename}.  Rename one of the files — walked recipes are ` +
+        `copied into a single flat directory.`,
+      );
+    }
     return { ok: false, exitCode: 2 };
   }
 

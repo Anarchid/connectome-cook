@@ -34,7 +34,7 @@ function isUrl(s: string): boolean {
 }
 
 /** Build the source base for resolving children of a recipe loaded from `loc`. */
-function sourceBaseFor(loc: string): RecipeSourceBase {
+export function sourceBaseFor(loc: string): RecipeSourceBase {
   return isUrl(loc) ? { kind: 'url', base: loc } : { kind: 'file', dir: dirname(loc) };
 }
 

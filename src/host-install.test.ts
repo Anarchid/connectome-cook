@@ -11,8 +11,10 @@ import { join } from 'node:path';
 import {
   hostBuildCommand,
   hostPathFor,
+  isSatisfiedByLock,
   planHostActions,
   renderActionPreview,
+  type CloneAction,
   type HostBackendOptions,
 } from './backends/host.js';
 import {
@@ -229,5 +231,54 @@ describe('lockfile', () => {
 
     writeFileSync(join(dir, 'connectome.lock'), JSON.stringify({ version: 99 }));
     expect(() => readLockfile(dir)).toThrow(/unsupported lockfile version/);
+  });
+});
+
+describe('isSatisfiedByLock', () => {
+  const mkLock = (over: Partial<Lockfile> = {}): Lockfile => ({
+    version: 1,
+    backend: 'host',
+    recipePath: '/r.json',
+    createdAt: '2026-07-20T00:00:00.000Z',
+    connectomeHost: { url: 'https://x/ch.git', ref: 'main', commit: 'oldsha' },
+    components: [{
+      key: 'https://x/y.git@main', role: 'mcp', url: 'https://x/y.git',
+      ref: 'main', commit: 'oldsha', path: '/p', install: 'npm install',
+    }],
+    localExtensions: [],
+    requirements: [],
+    launch: { kind: 'script', script: '/inst/run.sh' },
+    ...over,
+  });
+  const mkAction = (over: Partial<CloneAction> = {}): CloneAction => ({
+    key: 'https://x/y.git@main', role: 'mcp', url: 'https://x/y.git',
+    ref: 'main', target: dir, buildCommand: 'npm install', ...over,
+  });
+
+  test('satisfied on matching url+ref+install with no pin requested', () => {
+    expect(isSatisfiedByLock(mkAction(), mkLock())).toBe(true);
+  });
+
+  test('a --pin-refs commit change forces a re-clone (component)', () => {
+    expect(isSatisfiedByLock(mkAction({ commit: 'newsha' }), mkLock())).toBe(false);
+    expect(isSatisfiedByLock(mkAction({ commit: 'oldsha' }), mkLock())).toBe(true);
+    // Lock entry without a recorded commit never satisfies a pinned action.
+    const unpinnedLock = mkLock();
+    delete unpinnedLock.components[0]!.commit;
+    expect(isSatisfiedByLock(mkAction({ commit: 'newsha' }), unpinnedLock)).toBe(false);
+  });
+
+  test('a --pin-refs commit change forces a re-clone (connectome-host)', () => {
+    const ch = mkAction({
+      key: 'connectome-host', role: 'connectome-host',
+      url: 'https://x/ch.git', buildCommand: 'bun install',
+    });
+    expect(isSatisfiedByLock(ch, mkLock())).toBe(true);
+    expect(isSatisfiedByLock({ ...ch, commit: 'newsha' }, mkLock())).toBe(false);
+    expect(isSatisfiedByLock({ ...ch, commit: 'oldsha' }, mkLock())).toBe(true);
+  });
+
+  test('never satisfied when the target directory is gone', () => {
+    expect(isSatisfiedByLock(mkAction({ target: '/nonexistent-dir-xyz' }), mkLock())).toBe(false);
   });
 });
