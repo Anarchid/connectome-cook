@@ -77,6 +77,12 @@ export function gitCloneCommand(source: McpSource, target: string): string {
  *  operator pinned. */
 export function gitCheckoutCommand(source: McpSource): string {
   if (source.commit) {
+    // A plain clone never fetches refs/merge-requests/* or refs/pull/*, so a
+    // SHA pinned from such a refspec isn't in the object store yet — fetch
+    // the ref before checking out the pin.
+    if (source.ref?.startsWith('refs/')) {
+      return ` && git fetch origin ${source.ref} && git checkout ${source.commit}`;
+    }
     return ` && git checkout ${source.commit}`;
   }
   if (!source.ref || source.ref === 'main') return '';

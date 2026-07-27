@@ -109,7 +109,9 @@ describe('renderLauncher', () => {
 
   test('sidecars bring-up precedes the agent exec and honors the skip env', () => {
     const sh = renderLauncher('r.json', { hasSidecars: true, envsubstFiles: [] });
-    expect(sh).toContain('docker compose -f docker-compose.sidecars.yml up -d --wait');
+    // --env-file /dev/null keeps compose from auto-loading the shell-source
+    // .env, whose '\'' quoting its dotenv parser rejects.
+    expect(sh).toContain('docker compose --env-file /dev/null -f docker-compose.sidecars.yml up -d --wait');
     expect(sh).toContain('COOK_SKIP_SIDECARS');
     expect(sh.indexOf('docker compose')).toBeLessThan(sh.indexOf('exec bun'));
   });
@@ -226,5 +228,17 @@ describe('pin-refs', () => {
     expect(gitCheckoutCommand(source)).toBe(' && git checkout abc1234def');
     delete source.commit;
     expect(gitCheckoutCommand(source)).toBe('');
+  });
+
+  test('gitCheckoutCommand fetches refspec refs before checking out a pin', () => {
+    // A plain clone never fetches refs/merge-requests/* — without the fetch,
+    // `git checkout <sha>` fails with "reference is not a tree".
+    const source: McpSource = {
+      key: 'k', url: 'https://g/x.git', ref: 'refs/merge-requests/5/head',
+      commit: 'abc1234def', install: { kind: 'npm' }, inContainerPath: '/x', refs: [],
+    };
+    expect(gitCheckoutCommand(source)).toBe(
+      ' && git fetch origin refs/merge-requests/5/head && git checkout abc1234def',
+    );
   });
 });

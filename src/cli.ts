@@ -359,6 +359,7 @@ async function handleRun(argv: string[]): Promise<number> {
   // launching a stale dir while silently ignoring them would be wrong.
   const wantsFreshBuild = runFlags.rebuild
     || !!runFlags.strict
+    || !!runFlags['pin-refs']
     || !!runFlags['allow-incomplete-templates']
     || runFlags['env-file'] !== undefined
     || runFlags['image-name'] !== undefined

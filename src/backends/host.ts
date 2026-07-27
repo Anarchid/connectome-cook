@@ -232,22 +232,26 @@ export function renderActionPreview(actions: HostActions, options: HostBackendOp
 // ---------------------------------------------------------------------------
 
 /** True when the existing lock says this clone is already materialized at
- *  the same url+ref+install and the target exists — skip it. A component
+ *  the same url+ref+install (and, when the action carries a --pin-refs
+ *  commit, the same commit) and the target exists — skip it. A component
  *  whose build failed never reaches the lock (and its target is removed on
  *  failure), so a half-built checkout cannot satisfy this check. */
-function isSatisfiedByLock(
+export function isSatisfiedByLock(
   action: CloneAction,
   lock: Lockfile | null,
 ): boolean {
   if (!lock || !existsSync(action.target)) return false;
   if (action.role === 'connectome-host') {
-    return lock.connectomeHost.url === action.url && lock.connectomeHost.ref === action.ref;
+    return lock.connectomeHost.url === action.url
+      && lock.connectomeHost.ref === action.ref
+      && (action.commit === undefined || lock.connectomeHost.commit === action.commit);
   }
   const entry = lock.components.find((c) => c.key === action.key);
   return !!entry
     && entry.url === action.url
     && entry.ref === action.ref
-    && entry.install === (action.buildCommand || 'clone-only');
+    && entry.install === (action.buildCommand || 'clone-only')
+    && (action.commit === undefined || entry.commit === action.commit);
 }
 
 /** Clone URL with an optional token (resolved values > environment; never
@@ -285,7 +289,14 @@ function executeClone(action: CloneAction, values: Record<string, string>): { co
   }
   if (action.commit) {
     // Pinned build: check out the exact SHA the operator resolved at cook
-    // time, regardless of where the branch tip has moved since.
+    // time, regardless of where the branch tip has moved since. A refspec
+    // pin (refs/merge-requests/*, refs/pull/*) isn't fetched by the plain
+    // clone — fetch the ref first so the SHA exists in the object store.
+    if (action.ref.startsWith('refs/')) {
+      execFileSync('git', ['fetch', 'origin', action.ref], {
+        cwd: action.target, stdio: ['ignore', 'inherit', 'inherit'],
+      });
+    }
     execFileSync('git', ['checkout', action.commit], {
       cwd: action.target, stdio: ['ignore', 'inherit', 'inherit'],
     });
@@ -402,7 +413,10 @@ export function renderLauncher(
       '# bootstrap services have exited successfully. COOK_SKIP_SIDECARS=1',
       '# skips this (e.g. when sidecars are managed out-of-band).',
       `if [ "\${COOK_SKIP_SIDECARS:-0}" != "1" ]; then`,
-      `  docker compose -f ${SIDECAR_COMPOSE_FILENAME} up -d --wait`,
+      '  # --env-file /dev/null: compose would otherwise auto-load ./.env, whose',
+      "  # shell-source quoting ('\\'' escapes) its dotenv parser rejects. The",
+      '  # values are already exported above, so interpolation still sees them.',
+      `  docker compose --env-file /dev/null -f ${SIDECAR_COMPOSE_FILENAME} up -d --wait`,
       'fi',
     );
   }
