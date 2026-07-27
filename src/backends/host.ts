@@ -583,7 +583,7 @@ export async function runHostBackend(
   const parentRecipeBasename = recipeFilename(plan.parentWalk.path);
   try {
     for (const walk of plan.walks) {
-      const configuration = lowerToConfiguration(walk.recipe, overlays.get(walk.path));
+      const configuration = lowerToConfiguration(walk.recipe, overlays.get(walk.path), walk.path);
       writeFileSync(
         join(installDir, 'recipes', recipeFilename(walk.path)),
         JSON.stringify(configuration, null, 2) + '\n',
