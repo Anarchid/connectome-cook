@@ -112,3 +112,82 @@ describe('resolvePresent — altNames satisfaction', () => {
     expect(missing.map((v) => v.name)).toContain('GITLAB_TOKEN');
   });
 });
+
+describe('deriveRequiredVars — explicit recipe reference pins the name', () => {
+  // conhost's substituteEnvVars throws at container start on a truly-missing
+  // ${VAR}, so a recipe that explicitly references ${ANTHROPIC_API_KEY} must
+  // demand that exact name — the auth-token alternative can't satisfy it.
+  test('explicit ${ANTHROPIC_API_KEY} strips altNames from the merged entry', () => {
+    const required = deriveRequiredVars(
+      [
+        {
+          name: 'ANTHROPIC_API_KEY',
+          usedIn: [{ recipePath: '/r/a.json', jsonPath: 'agent.env.KEY' }],
+        },
+      ],
+      [],
+    );
+    const anthropic = required.find((v) => v.name === 'ANTHROPIC_API_KEY');
+    expect(anthropic).toBeDefined();
+    expect(anthropic!.altNames).toBeUndefined();
+  });
+
+  test('auth token alone no longer satisfies when the recipe demands the key by name', () => {
+    const required = deriveRequiredVars(
+      [
+        {
+          name: 'ANTHROPIC_API_KEY',
+          usedIn: [{ recipePath: '/r/a.json', jsonPath: 'agent.env.KEY' }],
+        },
+      ],
+      [],
+    );
+    const { missing } = resolvePresent(required, {
+      ANTHROPIC_AUTH_TOKEN: 'sk-ant-oat01-abc',
+    });
+    expect(missing.map((v) => v.name)).toContain('ANTHROPIC_API_KEY');
+  });
+
+  test('defaulted ${ANTHROPIC_API_KEY:-x} reference keeps altNames', () => {
+    // A `${VAR:-x}` reference never throws — conhost applies the default —
+    // so the alternative still satisfies the credential requirement.
+    const required = deriveRequiredVars(
+      [
+        {
+          name: 'ANTHROPIC_API_KEY',
+          usedIn: [{ recipePath: '/r/a.json', jsonPath: 'agent.env.KEY' }],
+          defaultValue: 'unset',
+        },
+      ],
+      [],
+    );
+    const anthropic = required.find((v) => v.name === 'ANTHROPIC_API_KEY');
+    expect(anthropic!.altNames).toEqual(['ANTHROPIC_AUTH_TOKEN']);
+    const { missing } = resolvePresent(required, {
+      ANTHROPIC_AUTH_TOKEN: 'sk-ant-oat01-abc',
+    });
+    expect(missing.map((v) => v.name)).not.toContain('ANTHROPIC_API_KEY');
+  });
+
+  test('explicit ${ANTHROPIC_AUTH_TOKEN} keeps altNames on the key entry and adds its own entry', () => {
+    const required = deriveRequiredVars(
+      [
+        {
+          name: 'ANTHROPIC_AUTH_TOKEN',
+          usedIn: [{ recipePath: '/r/a.json', jsonPath: 'agent.env.TOKEN' }],
+        },
+      ],
+      [],
+    );
+    const key = required.find((v) => v.name === 'ANTHROPIC_API_KEY');
+    expect(key!.altNames).toEqual(['ANTHROPIC_AUTH_TOKEN']);
+    const token = required.find((v) => v.name === 'ANTHROPIC_AUTH_TOKEN');
+    expect(token).toBeDefined();
+    expect(token!.altNames).toBeUndefined();
+    // The token alone satisfies both entries.
+    const { missing } = resolvePresent(required, {
+      ANTHROPIC_AUTH_TOKEN: 'sk-ant-oat01-abc',
+    });
+    expect(missing).toHaveLength(0);
+  });
+});

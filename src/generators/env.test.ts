@@ -195,6 +195,67 @@ describe('generateEnv — no env vars at all', () => {
   });
 });
 
+describe('generateEnv — recipe explicitly references a credential', () => {
+  const walks: WalkResult[] = [
+    {
+      path: '/r/explicit.json',
+      recipe: { name: 'explicit', agent: { systemPrompt: 'text' } },
+    },
+  ];
+
+  test('explicit ${ANTHROPIC_AUTH_TOKEN} is emitted uncommented, no either/or guidance', () => {
+    const envVars: EnvVar[] = [
+      {
+        name: 'ANTHROPIC_AUTH_TOKEN',
+        usedIn: [{ recipePath: '/r/explicit.json', jsonPath: 'mcpServers.x.env.TOKEN' }],
+      },
+    ];
+    const out = generateEnv({ walks, sources: [], envVars, options: DEFAULT_OPTIONS });
+
+    // Demanded by name: uncommented assignment with a required-by-name note.
+    expect(out).toMatch(/^ANTHROPIC_AUTH_TOKEN=/m);
+    expect(out).not.toMatch(/^# ANTHROPIC_AUTH_TOKEN=/m);
+    expect(out).toMatch(/required by name/);
+    // The either/or guidance is dropped (conhost throws if the referenced
+    // name is missing, so "set ONE" would mislead), and the API key is not
+    // presented as required.
+    expect(out).not.toMatch(/set ONE/);
+    expect(out).not.toMatch(/^ANTHROPIC_API_KEY=/m);
+  });
+
+  test('explicit ${ANTHROPIC_API_KEY} is emitted uncommented by name, no either/or guidance', () => {
+    const envVars: EnvVar[] = [
+      {
+        name: 'ANTHROPIC_API_KEY',
+        usedIn: [{ recipePath: '/r/explicit.json', jsonPath: 'agent.env.KEY' }],
+      },
+    ];
+    const out = generateEnv({ walks, sources: [], envVars, options: DEFAULT_OPTIONS });
+
+    expect(out).toMatch(/^ANTHROPIC_API_KEY=/m);
+    expect(out).toMatch(/required by name/);
+    expect(out).not.toMatch(/set ONE/);
+    // The auth token isn't offered as an alternative — it wouldn't satisfy
+    // the recipe's explicit reference.
+    expect(out).not.toMatch(/^#? ?ANTHROPIC_AUTH_TOKEN=/m);
+  });
+
+  test('defaulted ${ANTHROPIC_API_KEY:-x} keeps the either/or block', () => {
+    const envVars: EnvVar[] = [
+      {
+        name: 'ANTHROPIC_API_KEY',
+        usedIn: [{ recipePath: '/r/explicit.json', jsonPath: 'agent.env.KEY' }],
+        defaultValue: 'unset',
+      },
+    ];
+    const out = generateEnv({ walks, sources: [], envVars, options: DEFAULT_OPTIONS });
+
+    // A defaulted reference never throws at startup, so the choice stays open.
+    expect(out).toMatch(/set ONE/);
+    expect(out).toMatch(/^# ANTHROPIC_AUTH_TOKEN=/m);
+  });
+});
+
 describe('generateEnv — optional vars are commented out', () => {
   test('a recipe-referenced MODEL var lands in Optional, commented out', () => {
     const walks: WalkResult[] = [

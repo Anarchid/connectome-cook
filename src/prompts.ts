@@ -117,9 +117,20 @@ export function deriveRequiredVars(
     });
   }
   // Dedupe by name (envVar may collide with a runtime var declared by us).
+  // A collision without a recipe default means something demands this EXACT
+  // name — conhost's substituteEnvVars throws at container start on a
+  // truly-missing `${VAR}` — so an alternative name can no longer satisfy
+  // the requirement: strip altNames from the kept entry.  (A `${VAR:-x}`
+  // reference carries defaultValue and doesn't throw, so alternatives still
+  // satisfy it.)
   const byName = new Map<string, RequiredVar>();
   for (const v of out) {
-    if (!byName.has(v.name)) byName.set(v.name, v);
+    const existing = byName.get(v.name);
+    if (existing === undefined) {
+      byName.set(v.name, v);
+    } else if (existing.altNames !== undefined && v.defaultValue === undefined) {
+      delete existing.altNames;
+    }
   }
   return Array.from(byName.values());
 }
@@ -231,6 +242,10 @@ export async function promptForVars(missing: RequiredVar[]): Promise<PromptResul
   const values: Record<string, string> = {};
   let cancelled = false;
   outer: for (const v of missing) {
+    // Already supplied via an earlier entry's alt-flow (e.g. the operator
+    // skipped ANTHROPIC_API_KEY and typed ANTHROPIC_AUTH_TOKEN, which also
+    // sits in `missing` as its own recipe-derived entry) — don't re-prompt.
+    if (values[v.name] !== undefined) continue;
     const scopeNote = v.scope === 'build-secret' ? ' [build-time secret]' : '';
     const optionalNote = v.defaultValue !== undefined
       ? ` [optional, default: ${JSON.stringify(v.defaultValue)}]`

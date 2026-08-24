@@ -1,7 +1,7 @@
 # Triumvirate (Dockerized) — see README.md for the full operator guide.
 #
 # Quick start:
-#   1. cp .env.example .env  &&  edit it (ANTHROPIC_API_KEY at minimum)
+#   1. cp .env.example .env  &&  edit it (an Anthropic credential at minimum)
 #   2. Place your Zulip bot's .zuliprc in this directory  &&  chmod 600 .zuliprc
 #   3. docker compose up -d --build
 #   4. docker attach triumvirate            # join the conductor TUI
@@ -27,8 +27,9 @@ services:
     stdin_open: true
     tty: true
 
-    # ANTHROPIC_API_KEY (required) plus any optional GITLAB_* / NOTION_*
-    # vars you've added.  Recipe ${VAR} substitution reads from the
+    # An Anthropic credential (ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN;
+    # one is required) plus any optional GITLAB_* / NOTION_* vars you've
+    # added.  Recipe ${VAR} substitution reads from the
     # child process's env at startup.
     env_file:
       - .env

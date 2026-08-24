@@ -34,7 +34,7 @@ From this directory (`ch-builder-examples/triumvirate/`):
 ```bash
 # 1. Create your env file from the template and fill it in
 cp .env.example .env
-$EDITOR .env                        # ANTHROPIC_API_KEY + GITLAB_TOKEN + GITLAB_API_URL
+$EDITOR .env                        # ANTHROPIC_API_KEY (or ANTHROPIC_AUTH_TOKEN) + GITLAB_TOKEN + GITLAB_API_URL
 
 # 2. Place your Zulip bot's credentials here
 cp ~/Downloads/zuliprc .zuliprc
@@ -129,7 +129,7 @@ If you only changed `.env`, no rebuild is needed — just `docker compose up -d 
 | Children stay in `starting` forever | `docker compose logs triumvirate` to see what the conductor reports; the per-child runtime logs live inside the container at `/app/data/<name>/headless.log` and `startup.log`. Get them out with `docker cp triumvirate:/app/data/miner/startup.log .`. |
 | "API error 401" from Zulip on child startup | `.zuliprc` is wrong, expired, or wasn't bind-mounted correctly. Check `ls -la .zuliprc` on the host (must exist, mode 600), then verify the file made it into the container: `docker exec triumvirate cat /app/.zuliprc`. |
 | Permission errors on bind-mounted dirs | Container runs as UID 1000. `chown -R 1000:1000 data output review-output knowledge-requests input` on the host. |
-| Container exits immediately on `docker compose up` | Almost always missing `ANTHROPIC_API_KEY` — check `.env` is in this folder and `docker compose config` shows it being loaded. |
+| Container exits immediately on `docker compose up` | Almost always a missing Anthropic credential (`ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN`) — check `.env` is in this folder and `docker compose config` shows it being loaded. |
 | Need a shell in the container | `docker exec -it triumvirate bash`. The conductor TUI keeps running on its TTY; you get a separate shell. |
 | Want to inspect live state of a child without the TUI | `docker exec -it triumvirate cat /app/data/<name>/headless.log` or `tail -f` the same. |
 
