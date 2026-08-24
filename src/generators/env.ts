@@ -8,8 +8,16 @@
  *
  * Output layout (sections separated by `# --- <heading> ---` rules):
  *   1. Header comment naming the parent recipe.
- *   2. Required — ANTHROPIC_API_KEY (always; membrane reads it directly from
- *      process.env, not via recipe substitution) plus every recipe-referenced
+ *   2. Required — the Anthropic credential (always; connectome-host/membrane
+ *      read it directly from process.env, not via recipe substitution).
+ *      Either ANTHROPIC_API_KEY (emitted uncommented) or ANTHROPIC_AUTH_TOKEN
+ *      (long-lived OAuth bearer; emitted as a commented alternative) satisfies
+ *      it — when both are set, connectome-host prefers the auth token.
+ *      Exception: when a recipe explicitly substitutes `${ANTHROPIC_API_KEY}`
+ *      or `${ANTHROPIC_AUTH_TOKEN}` (no default), that name is demanded by
+ *      name (conhost throws on a missing `${VAR}` at container start), so the
+ *      referenced credential is emitted uncommented with its usage comment
+ *      and the either/or guidance is dropped.  Plus every recipe-referenced
  *      env var that doesn't match the optional-allowlist heuristic.
  *   3. Build-time secrets — one entry per `source.authSecret` with a comment
  *      pointing the operator at `docker build --secret id=<NAME>,env=<NAME>`.
@@ -20,6 +28,7 @@
  *
  * Placeholder heuristics for required-section values:
  *   - `ANTHROPIC_API_KEY` → `sk-ant-...` (special-case)
+ *   - `ANTHROPIC_AUTH_TOKEN` → `sk-ant-oat...` (special-case)
  *   - name contains `TOKEN`/`KEY`/`SECRET` → `<scheme>-...` based on prefix
  *     (`GITLAB_*` → `glpat-...`, `GITHUB_*` → `ghp_...`, `*GEMINI*`/`*GOOGLE*`
  *     → `AIza...`, `NOTION_*` → `ntn_...`, `*` → `sk-...`)
@@ -58,6 +67,7 @@ function isOptionalName(name: string): boolean {
  */
 function placeholderFor(name: string): string {
   if (name === 'ANTHROPIC_API_KEY') return 'sk-ant-...';
+  if (name === 'ANTHROPIC_AUTH_TOKEN') return 'sk-ant-oat...';
   if (name.includes('URL')) return 'https://...';
   if (/TOKEN|KEY|SECRET|PASS/.test(name)) {
     if (name.startsWith('GITLAB_')) return 'glpat-...';
@@ -118,29 +128,84 @@ function buildBuildTimeSecretsSection(sources: McpSource[]): string[] {
   return lines;
 }
 
-/** Required section: always-present ANTHROPIC_API_KEY + non-optional recipe vars. */
+/** Required section: always-present Anthropic credential + non-optional recipe vars. */
 function buildRequiredSection(envVars: EnvVar[]): string[] {
   const lines: string[] = [];
   lines.push('# --- Required ---');
   lines.push('');
 
-  // Always: ANTHROPIC_API_KEY. Even if the recipes don't reference
-  // ${ANTHROPIC_API_KEY}, membrane reads it directly from process.env.
-  lines.push(
-    '# Anthropic API key. Read directly from process.env by membrane (not',
+  // Always: the Anthropic credential. Even if the recipes don't reference
+  // ${ANTHROPIC_API_KEY} / ${ANTHROPIC_AUTH_TOKEN}, connectome-host and
+  // membrane read them directly from process.env.
+  //
+  // When a recipe EXPLICITLY substitutes one of the credential names,
+  // connectome-host throws at container start if that exact var is missing
+  // (`${VAR}` without a default) — so the referenced name is demanded by
+  // name and the either/or choice doesn't apply.  A `${VAR:-x}` reference
+  // carries a default and lands in the Optional section like any other
+  // defaulted var, so it doesn't pin the choice.
+  const explicitKey = envVars.find(
+    (v) => v.name === 'ANTHROPIC_API_KEY' && v.defaultValue === undefined,
   );
-  lines.push(
-    '# substituted into the recipe), so it is required regardless of whether',
+  const explicitToken = envVars.find(
+    (v) => v.name === 'ANTHROPIC_AUTH_TOKEN' && v.defaultValue === undefined,
   );
-  lines.push('# any recipe mentions it. Get one from console.anthropic.com.');
-  lines.push(`ANTHROPIC_API_KEY=${placeholderFor('ANTHROPIC_API_KEY')}`);
-  lines.push('');
 
-  // Recipe-referenced vars that aren't ANTHROPIC_API_KEY (already emitted),
-  // aren't optional-flavored by name heuristic, AND don't carry a recipe-
-  // declared default (`${VAR:-x}` form).  Defaulted vars go to Optional.
+  if (explicitKey !== undefined || explicitToken !== undefined) {
+    if (explicitKey !== undefined) {
+      lines.push(
+        '# Anthropic API key — required by name: the recipe references',
+      );
+      lines.push(
+        '# ${ANTHROPIC_API_KEY} directly (and connectome-host/membrane also',
+      );
+      lines.push('# read it from process.env). Get one from console.anthropic.com.');
+      lines.push(describeUsage(explicitKey));
+      lines.push(`ANTHROPIC_API_KEY=${placeholderFor('ANTHROPIC_API_KEY')}`);
+      lines.push('');
+    }
+    if (explicitToken !== undefined) {
+      lines.push(
+        '# Anthropic auth token (long-lived OAuth bearer, sent as',
+      );
+      lines.push(
+        '# `Authorization: Bearer` instead of `x-api-key`) — required by name:',
+      );
+      lines.push('# the recipe references ${ANTHROPIC_AUTH_TOKEN} directly.');
+      lines.push(describeUsage(explicitToken));
+      lines.push(`ANTHROPIC_AUTH_TOKEN=${placeholderFor('ANTHROPIC_AUTH_TOKEN')}`);
+      lines.push('');
+    }
+  } else {
+    // No explicit reference — either var satisfies the requirement; the API
+    // key is the common case so it's the uncommented one.
+    lines.push(
+      '# Anthropic credential — set ONE of the two variables below. Read directly',
+    );
+    lines.push(
+      '# from process.env by connectome-host/membrane (not substituted into the',
+    );
+    lines.push(
+      '# recipe), so one is required regardless of whether any recipe mentions it.',
+    );
+    lines.push('# If both are set, connectome-host prefers the auth token.');
+    lines.push('# Option 1: API key from console.anthropic.com.');
+    lines.push(`ANTHROPIC_API_KEY=${placeholderFor('ANTHROPIC_API_KEY')}`);
+    lines.push(
+      '# Option 2: long-lived OAuth bearer token (sent as `Authorization: Bearer`',
+    );
+    lines.push('# instead of `x-api-key`). Uncomment to use.');
+    lines.push(`# ANTHROPIC_AUTH_TOKEN=${placeholderFor('ANTHROPIC_AUTH_TOKEN')}`);
+    lines.push('');
+  }
+
+  // Recipe-referenced vars that aren't the Anthropic credential (already
+  // emitted above), aren't optional-flavored by name heuristic, AND don't
+  // carry a recipe-declared default (`${VAR:-x}` form).  Defaulted vars go
+  // to Optional.
   for (const envVar of envVars) {
     if (envVar.name === 'ANTHROPIC_API_KEY') continue;
+    if (envVar.name === 'ANTHROPIC_AUTH_TOKEN') continue;
     if (isOptionalName(envVar.name)) continue;
     if (envVar.defaultValue !== undefined) continue;
     lines.push(describeUsage(envVar));

@@ -8,7 +8,8 @@
  *   2. Synthetic input with a source that has `authSecret: GITLAB_TOKEN`:
  *      assert a comment mentioning BuildKit secrets appears near the secret.
  *   3. Synthetic input with no env vars: assert ANTHROPIC_API_KEY still
- *      appears (it's hardcoded for membrane).
+ *      appears (it's hardcoded for membrane), with the commented
+ *      ANTHROPIC_AUTH_TOKEN alternative alongside it.
  */
 
 import { describe, expect, test } from 'bun:test';
@@ -63,6 +64,8 @@ describe('generateEnv — triumvirate example', () => {
 
     // Uncommented ANTHROPIC_API_KEY assignment somewhere in the output.
     expect(out).toMatch(/^ANTHROPIC_API_KEY=/m);
+    // Commented ANTHROPIC_AUTH_TOKEN alternative alongside it.
+    expect(out).toMatch(/^# ANTHROPIC_AUTH_TOKEN=/m);
     // GITLAB_TOKEN and GITLAB_API_URL each present as `KEY=` lines.
     expect(out).toMatch(/^GITLAB_TOKEN=/m);
     expect(out).toMatch(/^GITLAB_API_URL=/m);
@@ -143,7 +146,7 @@ describe('generateEnv — build-time secrets', () => {
 });
 
 describe('generateEnv — no env vars at all', () => {
-  test('still emits ANTHROPIC_API_KEY in the Required section', () => {
+  test('still emits the Anthropic credential in the Required section', () => {
     const walks: WalkResult[] = [
       {
         path: '/r/empty.json',
@@ -162,6 +165,94 @@ describe('generateEnv — no env vars at all', () => {
     expect(out).toMatch(/^ANTHROPIC_API_KEY=/m);
     expect(out).toMatch(/# --- Required/);
     expect(out).not.toContain('\r');
+  });
+
+  test('emits ANTHROPIC_AUTH_TOKEN as a commented alternative with either/or guidance', () => {
+    const walks: WalkResult[] = [
+      {
+        path: '/r/empty.json',
+        recipe: { name: 'no-vars', agent: { systemPrompt: 'just text' } },
+      },
+    ];
+    const input: GeneratorInput = {
+      walks,
+      sources: [],
+      envVars: [],
+      options: DEFAULT_OPTIONS,
+    };
+
+    const out = generateEnv(input);
+
+    // The alternative is commented out (operator uncomments to use it) —
+    // never an uncommented assignment.
+    expect(out).toMatch(/^# ANTHROPIC_AUTH_TOKEN=/m);
+    expect(out).not.toMatch(/^ANTHROPIC_AUTH_TOKEN=/m);
+    // Either/or guidance: set ONE; both-set preference is documented.
+    expect(out).toMatch(/set ONE/);
+    expect(out).toMatch(/prefers the auth token/);
+    // The bearer-token nature is explained near the alternative.
+    expect(out).toMatch(/OAuth bearer/);
+  });
+});
+
+describe('generateEnv — recipe explicitly references a credential', () => {
+  const walks: WalkResult[] = [
+    {
+      path: '/r/explicit.json',
+      recipe: { name: 'explicit', agent: { systemPrompt: 'text' } },
+    },
+  ];
+
+  test('explicit ${ANTHROPIC_AUTH_TOKEN} is emitted uncommented, no either/or guidance', () => {
+    const envVars: EnvVar[] = [
+      {
+        name: 'ANTHROPIC_AUTH_TOKEN',
+        usedIn: [{ recipePath: '/r/explicit.json', jsonPath: 'mcpServers.x.env.TOKEN' }],
+      },
+    ];
+    const out = generateEnv({ walks, sources: [], envVars, options: DEFAULT_OPTIONS });
+
+    // Demanded by name: uncommented assignment with a required-by-name note.
+    expect(out).toMatch(/^ANTHROPIC_AUTH_TOKEN=/m);
+    expect(out).not.toMatch(/^# ANTHROPIC_AUTH_TOKEN=/m);
+    expect(out).toMatch(/required by name/);
+    // The either/or guidance is dropped (conhost throws if the referenced
+    // name is missing, so "set ONE" would mislead), and the API key is not
+    // presented as required.
+    expect(out).not.toMatch(/set ONE/);
+    expect(out).not.toMatch(/^ANTHROPIC_API_KEY=/m);
+  });
+
+  test('explicit ${ANTHROPIC_API_KEY} is emitted uncommented by name, no either/or guidance', () => {
+    const envVars: EnvVar[] = [
+      {
+        name: 'ANTHROPIC_API_KEY',
+        usedIn: [{ recipePath: '/r/explicit.json', jsonPath: 'agent.env.KEY' }],
+      },
+    ];
+    const out = generateEnv({ walks, sources: [], envVars, options: DEFAULT_OPTIONS });
+
+    expect(out).toMatch(/^ANTHROPIC_API_KEY=/m);
+    expect(out).toMatch(/required by name/);
+    expect(out).not.toMatch(/set ONE/);
+    // The auth token isn't offered as an alternative — it wouldn't satisfy
+    // the recipe's explicit reference.
+    expect(out).not.toMatch(/^#? ?ANTHROPIC_AUTH_TOKEN=/m);
+  });
+
+  test('defaulted ${ANTHROPIC_API_KEY:-x} keeps the either/or block', () => {
+    const envVars: EnvVar[] = [
+      {
+        name: 'ANTHROPIC_API_KEY',
+        usedIn: [{ recipePath: '/r/explicit.json', jsonPath: 'agent.env.KEY' }],
+        defaultValue: 'unset',
+      },
+    ];
+    const out = generateEnv({ walks, sources: [], envVars, options: DEFAULT_OPTIONS });
+
+    // A defaulted reference never throws at startup, so the choice stays open.
+    expect(out).toMatch(/set ONE/);
+    expect(out).toMatch(/^# ANTHROPIC_AUTH_TOKEN=/m);
   });
 });
 

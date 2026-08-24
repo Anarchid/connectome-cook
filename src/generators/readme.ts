@@ -157,7 +157,7 @@ function renderPrerequisites(
     '## Prerequisites',
     '',
     '- **Docker Engine 23+** with Compose v2 (`docker compose ...`, not `docker-compose ...`) and BuildKit (default in 23+).',
-    '- **An Anthropic API key** ([console.anthropic.com](https://console.anthropic.com/)). Set it as `ANTHROPIC_API_KEY` in `.env`.',
+    '- **An Anthropic credential** — either an API key ([console.anthropic.com](https://console.anthropic.com/)) set as `ANTHROPIC_API_KEY`, or a long-lived OAuth bearer token set as `ANTHROPIC_AUTH_TOKEN`, in `.env`. If both are set, connectome-host prefers the auth token.',
   ];
 
   if (usesZulip) {
@@ -282,7 +282,7 @@ function renderTroubleshooting(): string {
     '- **An MCP server failed at startup.** Run `docker compose logs <service>` to see the conductor\'s view. As of `@animalabs/agent-framework@0.3.0`, a single MCP server failure is fatal for the agent that uses it — fix the underlying issue (usually a missing or malformed credential) and restart with `docker compose up -d --force-recreate`.',
     '- **Build fails with "secret not found" / `--mount=type=secret`.** Some MCP sources need a build-time secret to clone a private repo. Cook writes each secret as a 0600-mode file at `<outDir>/<NAME>` (one per `source.authSecret`), and the generated `docker-compose.yml` references them via the top-level `secrets:` block — `docker compose build` reads the files automatically. If a file is missing or empty, populate it manually (`echo "<token>" > <NAME> && chmod 600 <NAME>`) before re-running the build. BuildKit must be enabled (default in Docker 23+).',
     '- **API error 401 from Zulip / GitLab on first run.** Credential file or env var is wrong. For Zulip, verify the file made it into the container: `docker compose exec <service> cat /app/.zuliprc`. For GitLab, double-check the token scopes and that `GITLAB_API_URL` matches your instance.',
-    '- **Container exits immediately.** Almost always missing `ANTHROPIC_API_KEY`. `docker compose config` will show whether `.env` is being loaded; the container logs will name the missing variable.',
+    '- **Container exits immediately.** Almost always a missing Anthropic credential — set `ANTHROPIC_API_KEY` (or `ANTHROPIC_AUTH_TOKEN`) in `.env`. `docker compose config` will show whether `.env` is being loaded; the container logs will name the missing variable.',
     '',
   ].join('\n');
 }
