@@ -80,9 +80,10 @@ describe('generateReadme — triumvirate fixture', () => {
     expect(out).toContain('Knowledge Reviewer');
     expect(out).toContain('Library Frontdesk');
 
-    // Prerequisites.
-    expect(out).toContain('Anthropic API key');
+    // Prerequisites. Both Anthropic credential options are named.
+    expect(out).toContain('Anthropic credential');
     expect(out).toContain('ANTHROPIC_API_KEY');
+    expect(out).toContain('ANTHROPIC_AUTH_TOKEN');
     expect(out).toContain('Zulip');
     expect(out).toContain('.zuliprc');
     expect(out).toContain('GitLab');

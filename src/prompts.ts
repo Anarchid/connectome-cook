@@ -9,7 +9,9 @@
  * on any missing required value.  No interactive output.
  *
  * The "always required" list is intentionally short:
- *   - ANTHROPIC_API_KEY (membrane reads it directly from process.env)
+ *   - the Anthropic credential (membrane reads it directly from process.env):
+ *     ANTHROPIC_API_KEY, satisfiable by the ANTHROPIC_AUTH_TOKEN alternative
+ *     (long-lived OAuth bearer; connectome-host prefers it when both are set)
  *
  * Plus everything in input.envVars (recipe ${VAR} references) and every
  * source.authSecret (BuildKit secrets used at image-build time).
@@ -37,6 +39,12 @@ export interface RequiredVar {
    *  cook treats it as optional (skipping prompts to that var doesn't
    *  block the build; the recipe loader applies the default at runtime). */
   defaultValue?: string;
+  /** Alternative variable names that ALSO satisfy this requirement — e.g.
+   *  ANTHROPIC_AUTH_TOKEN satisfies the ANTHROPIC_API_KEY requirement
+   *  (connectome-host accepts either, preferring the auth token when both
+   *  are set).  resolvePresent checks these after the primary name;
+   *  promptForVars offers each in turn when the primary is skipped. */
+  altNames?: string[];
 }
 
 /** Result: collected values plus a flag set when the user cancelled
@@ -48,7 +56,8 @@ export interface PromptResult {
 
 /** Build the list of variables that need a value, deduped by name.
  *  Includes:
- *    - ANTHROPIC_API_KEY (always; membrane reads from process.env)
+ *    - ANTHROPIC_API_KEY (always; membrane reads from process.env), with
+ *      ANTHROPIC_AUTH_TOKEN as an accepted alternative (altNames)
  *    - every envVar (recipe `${VAR}`)
  *    - every authSecret across sources (clone-time)
  *    - every sidecar service's secrets[] entries (runtime, written by cook
@@ -70,6 +79,9 @@ export function deriveRequiredVars(
       consumer: 'Anthropic SDK (membrane)',
       scope: 'runtime',
       placeholder: 'sk-ant-...',
+      // OAuth bearer alternative — connectome-host accepts either credential
+      // (and prefers the auth token when both are set).
+      altNames: ['ANTHROPIC_AUTH_TOKEN'],
     },
   ];
   for (const v of envVars) {
@@ -116,6 +128,7 @@ export function deriveRequiredVars(
  *  here — env.ts produces .env.example, prompts produces .env). */
 function placeholderFor(name: string): string {
   if (name === 'ANTHROPIC_API_KEY') return 'sk-ant-...';
+  if (name === 'ANTHROPIC_AUTH_TOKEN') return 'sk-ant-oat...';
   if (/URL/.test(name)) return 'https://...';
   if (name.startsWith('GITLAB_')) return 'glpat-...';
   if (name.startsWith('GITHUB_')) return 'ghp_...';
@@ -175,7 +188,12 @@ export function resolveValue(
  *  found and the names still missing.  Note: prompted values aren't in
  *  scope yet at this stage — only env-file + process.env are checked.
  *  After prompting, the caller merges prompted values into the bag and
- *  calls resolveValue per-name for any later lookup. */
+ *  calls resolveValue per-name for any later lookup.
+ *
+ *  A var with `altNames` is satisfied when the primary name OR any
+ *  alternative resolves; every name that resolves is recorded under its
+ *  own key (so e.g. ANTHROPIC_AUTH_TOKEN lands in .env under its own name
+ *  and connectome-host's both-set preference still applies downstream). */
 export function resolvePresent(
   required: RequiredVar[],
   envFileValues: Record<string, string>,
@@ -183,19 +201,27 @@ export function resolvePresent(
   const found: Record<string, string> = {};
   const missing: RequiredVar[] = [];
   for (const v of required) {
-    const value = resolveValue(v.name, { envFileValues });
-    if (value !== undefined) {
-      found[v.name] = value;
-    } else {
-      missing.push(v);
+    let satisfied = false;
+    for (const name of [v.name, ...(v.altNames ?? [])]) {
+      const value = resolveValue(name, { envFileValues });
+      if (value !== undefined) {
+        found[name] = value;
+        satisfied = true;
+      }
     }
+    if (!satisfied) missing.push(v);
   }
   return { found, missing };
 }
 
 /** Interactive: prompt for every missing variable.  Returns values for the
  *  ones the user supplied; values left blank are omitted (the .env will
- *  contain a commented placeholder so the operator notices). */
+ *  contain a commented placeholder so the operator notices).
+ *
+ *  A var with `altNames` gets a hint in its prompt; skipping it (Enter)
+ *  immediately offers each alternative in turn, so the operator can satisfy
+ *  e.g. the Anthropic credential with ANTHROPIC_AUTH_TOKEN instead of
+ *  ANTHROPIC_API_KEY without leaving the flow. */
 export async function promptForVars(missing: RequiredVar[]): Promise<PromptResult> {
   if (missing.length === 0) return { values: {}, cancelled: false };
 
@@ -204,15 +230,18 @@ export async function promptForVars(missing: RequiredVar[]): Promise<PromptResul
 
   const values: Record<string, string> = {};
   let cancelled = false;
-  for (const v of missing) {
+  outer: for (const v of missing) {
     const scopeNote = v.scope === 'build-secret' ? ' [build-time secret]' : '';
     const optionalNote = v.defaultValue !== undefined
       ? ` [optional, default: ${JSON.stringify(v.defaultValue)}]`
       : '';
+    const altNote = v.altNames && v.altNames.length > 0
+      ? ` [or Enter to supply ${v.altNames.join(' / ')} instead]`
+      : '';
     const response = await promptsLib({
       type: 'text',
       name: 'value',
-      message: `${v.name}${scopeNote}${optionalNote}\n  ${v.consumer}\n  ${v.placeholder ?? ''}\n`,
+      message: `${v.name}${scopeNote}${optionalNote}${altNote}\n  ${v.consumer}\n  ${v.placeholder ?? ''}\n`,
       initial: '',
     });
     if (response.value === undefined) {
@@ -221,6 +250,26 @@ export async function promptForVars(missing: RequiredVar[]): Promise<PromptResul
     }
     if (response.value !== '') {
       values[v.name] = response.value as string;
+      continue;
+    }
+    // Primary skipped — offer each alternative name in turn until one is
+    // supplied (or all are skipped, leaving the requirement unmet — same
+    // outcome as skipping a plain var).
+    for (const alt of v.altNames ?? []) {
+      const altResponse = await promptsLib({
+        type: 'text',
+        name: 'value',
+        message: `${alt} [alternative to ${v.name}]\n  ${v.consumer}\n  ${placeholderFor(alt)}\n`,
+        initial: '',
+      });
+      if (altResponse.value === undefined) {
+        cancelled = true;
+        break outer;
+      }
+      if (altResponse.value !== '') {
+        values[alt] = altResponse.value as string;
+        break;
+      }
     }
   }
   return { values, cancelled };

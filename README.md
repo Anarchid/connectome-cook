@@ -133,13 +133,17 @@ private repos) warn and stay symbolic.
 --pin-refs             Resolve branch refs to current SHAs (Phase 4 — TODO)
 ```
 
+### Anthropic credentials
+
+Every cooked deployment needs one Anthropic credential in its `.env`: either `ANTHROPIC_API_KEY` (a standard API key from [console.anthropic.com](https://console.anthropic.com/)) or `ANTHROPIC_AUTH_TOKEN` (a long-lived OAuth bearer token, sent by connectome-host as `Authorization: Bearer` instead of `x-api-key`). Cook's prompts, generated `.env.example`, and missing-value checks accept either — press Enter at the `ANTHROPIC_API_KEY` prompt to be offered the auth-token alternative. If both are set, connectome-host prefers the auth token.
+
 ## What gets generated
 
 ```
 <outDir>/                    # cook build (docker backend)
 ├── Dockerfile               # multi-stage; one builder per source (MCP + extensions) + ch-deps + runtime
 ├── docker-compose.yml       # single service; bind mounts from workspace mounts
-├── .env.example             # template for ANTHROPIC_API_KEY + recipe ${VAR}s
+├── .env.example             # template for the Anthropic credential + recipe ${VAR}s
 ├── .env                     # only when prompts/env-file/process.env supplied values
 ├── README.md                # operator instructions, data-driven from the recipe
 ├── connectome.lock          # record of the materialization (components, requirements, launch)

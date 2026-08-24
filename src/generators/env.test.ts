@@ -8,7 +8,8 @@
  *   2. Synthetic input with a source that has `authSecret: GITLAB_TOKEN`:
  *      assert a comment mentioning BuildKit secrets appears near the secret.
  *   3. Synthetic input with no env vars: assert ANTHROPIC_API_KEY still
- *      appears (it's hardcoded for membrane).
+ *      appears (it's hardcoded for membrane), with the commented
+ *      ANTHROPIC_AUTH_TOKEN alternative alongside it.
  */
 
 import { describe, expect, test } from 'bun:test';
@@ -63,6 +64,8 @@ describe('generateEnv — triumvirate example', () => {
 
     // Uncommented ANTHROPIC_API_KEY assignment somewhere in the output.
     expect(out).toMatch(/^ANTHROPIC_API_KEY=/m);
+    // Commented ANTHROPIC_AUTH_TOKEN alternative alongside it.
+    expect(out).toMatch(/^# ANTHROPIC_AUTH_TOKEN=/m);
     // GITLAB_TOKEN and GITLAB_API_URL each present as `KEY=` lines.
     expect(out).toMatch(/^GITLAB_TOKEN=/m);
     expect(out).toMatch(/^GITLAB_API_URL=/m);
@@ -143,7 +146,7 @@ describe('generateEnv — build-time secrets', () => {
 });
 
 describe('generateEnv — no env vars at all', () => {
-  test('still emits ANTHROPIC_API_KEY in the Required section', () => {
+  test('still emits the Anthropic credential in the Required section', () => {
     const walks: WalkResult[] = [
       {
         path: '/r/empty.json',
@@ -162,6 +165,33 @@ describe('generateEnv — no env vars at all', () => {
     expect(out).toMatch(/^ANTHROPIC_API_KEY=/m);
     expect(out).toMatch(/# --- Required/);
     expect(out).not.toContain('\r');
+  });
+
+  test('emits ANTHROPIC_AUTH_TOKEN as a commented alternative with either/or guidance', () => {
+    const walks: WalkResult[] = [
+      {
+        path: '/r/empty.json',
+        recipe: { name: 'no-vars', agent: { systemPrompt: 'just text' } },
+      },
+    ];
+    const input: GeneratorInput = {
+      walks,
+      sources: [],
+      envVars: [],
+      options: DEFAULT_OPTIONS,
+    };
+
+    const out = generateEnv(input);
+
+    // The alternative is commented out (operator uncomments to use it) —
+    // never an uncommented assignment.
+    expect(out).toMatch(/^# ANTHROPIC_AUTH_TOKEN=/m);
+    expect(out).not.toMatch(/^ANTHROPIC_AUTH_TOKEN=/m);
+    // Either/or guidance: set ONE; both-set preference is documented.
+    expect(out).toMatch(/set ONE/);
+    expect(out).toMatch(/prefers the auth token/);
+    // The bearer-token nature is explained near the alternative.
+    expect(out).toMatch(/OAuth bearer/);
   });
 });
 
