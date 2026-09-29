@@ -12,9 +12,14 @@
  *      ANTHROPIC_AUTH_TOKEN alternative alongside it.
  */
 
-import { describe, expect, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, test, spyOn } from 'bun:test';
+import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { resolvePlan } from '../plan.js';
+import { log } from '../log.js';
+import { deriveRequiredVars, resolvePresent } from '../prompts.js';
 import { fileURLToPath } from 'node:url';
-import { dirname, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { generateEnv } from './env.js';
 import { collectEnvVars } from '../env-collector.js';
 import { detectSources } from '../source-detector.js';
@@ -36,6 +41,117 @@ const DEFAULT_OPTIONS: BuildOptions = {
   strict: false,
   pinRefs: false,
 };
+
+describe('provider auth — planner and generated env', () => {
+  const envVars = ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'BUILD_SECRET', 'SIDECAR_SECRET'] as const;
+  let saved: Record<string, string | undefined> = {};
+
+  beforeEach(() => {
+    saved = {};
+    for (const name of envVars) {
+      saved[name] = process.env[name];
+      delete process.env[name];
+    }
+  });
+
+  afterEach(() => {
+    for (const name of envVars) {
+      if (saved[name] === undefined) {
+        delete process.env[name];
+      } else {
+        process.env[name] = saved[name];
+      }
+    }
+  });
+
+  async function check(provider: string | undefined, prompt = 'stub', childProvider?: string, secrets = false) {
+    const dir = mkdtempSync(join(tmpdir(), 'provider-auth-'));
+    const agent = (provider: string | undefined) => ({
+      ...(provider === undefined ? {} : { provider }),
+      model: provider === 'openai-codex' ? 'gpt-6.1-sol' : 'claude-sonnet-5',
+      systemPrompt: prompt,
+    });
+    const warn = spyOn(log, 'warn').mockImplementation(() => {});
+    try {
+      writeFileSync(`${dir}/parent.json`, JSON.stringify({
+        name: 'parent', agent: agent(provider),
+        ...(childProvider ? { modules: { fleet: { children: [{ name: 'child', recipe: './child.json' }] } } } : {}),
+        ...(secrets ? {
+          services: [{ name: 'sidecar', image: 'example:1', secrets: ['SIDECAR_SECRET'] }],
+          mcpServers: { tool: { command: 'bun', source: {
+            url: 'https://example.com/tool.git', authSecret: 'BUILD_SECRET',
+            install: { runtime: 'bun', run: 'bun install' },
+          } } },
+        } : {}),
+      }));
+      if (childProvider) writeFileSync(`${dir}/child.json`, JSON.stringify({ name: 'child', agent: agent(childProvider) }));
+      const result = await resolvePlan(`${dir}/parent.json`, { strict: true, noPrompts: true });
+      expect(result.ok).toBe(true);
+      if (!result.ok) throw new Error('plan failed');
+      const plan = result.plan;
+      const out = generateEnv({ walks: plan.walks, sources: plan.sources, envVars: plan.envVars, options: DEFAULT_OPTIONS });
+      return { out, warnings: warn.mock.calls.map(([message]) => message), plan };
+    } finally {
+      warn.mockRestore();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  test('explicit Codex-only tree has no implicit credential or missing-value warning', async () => {
+    const { out, warnings, plan } = await check('openai-codex', 'stub', 'openai-codex');
+    expect(plan.walks).toHaveLength(2);
+    expect(out).not.toContain('ANTHROPIC_');
+    expect(warnings).toEqual([]);
+  });
+
+  for (const provider of [undefined, 'anthropic', 'unknown-route']) {
+    test(`provider ${provider ?? '(omitted)'} retains either/or requirement`, async () => {
+      const { out, warnings } = await check(provider);
+      expect(out).toMatch(/^ANTHROPIC_API_KEY=/m);
+      expect(out).toMatch(/^# ANTHROPIC_AUTH_TOKEN=/m);
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toContain('1 required value');
+    });
+  }
+
+  test('Anthropic descendant retains the credential in a mixed fleet', async () => {
+    const { out, warnings } = await check('openai-codex', 'stub', 'anthropic');
+    expect(out).toMatch(/^ANTHROPIC_API_KEY=/m);
+    expect(out).toMatch(/^# ANTHROPIC_AUTH_TOKEN=/m);
+    expect(warnings[0]).toContain('1 required value');
+  });
+
+  for (const name of ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN']) {
+    test(`Codex explicit ${name} is required by exact name`, async () => {
+      const { out, warnings, plan } = await check('openai-codex', '${' + name + '}');
+      expect(out).toMatch(new RegExp(`^${name}=`, 'm'));
+      expect(warnings[0]).toContain('1 required value');
+      // Exact references cannot be satisfied by the other credential.
+      const other = name === 'ANTHROPIC_API_KEY' ? 'ANTHROPIC_AUTH_TOKEN' : 'ANTHROPIC_API_KEY';
+      const { missing } = resolvePresent(deriveRequiredVars(plan.envVars, [], [], plan.walks), { [other]: 'fixture-only' });
+      expect(missing.map((v) => v.name)).toContain(name);
+    });
+
+    test(`Codex default-valued ${name} remains optional`, async () => {
+      const { out, warnings, plan } = await check('openai-codex', '${' + name + ':-fixture-default}');
+      expect(out).toMatch(new RegExp(`^# ${name}=fixture-default$`, 'm'));
+      expect(out).not.toMatch(new RegExp(`^${name}=`, 'm'));
+      // Existing noPrompts behavior also warns for missing optional references.
+      expect(warnings[0]).toContain('1 required value');
+      const required = deriveRequiredVars(plan.envVars, [], [], plan.walks);
+      expect(required).toHaveLength(1);
+      expect(required[0]!.name).toBe(name);
+      expect(required[0]!.defaultValue).toBe('fixture-default');
+    });
+  }
+
+  test('Codex still reports unrelated build and sidecar secrets', async () => {
+    const { out, warnings } = await check('openai-codex', 'stub', undefined, true);
+    expect(out).not.toContain('ANTHROPIC_');
+    expect(out).toMatch(/^BUILD_SECRET=/m);
+    expect(warnings[0]).toContain('2 required values');
+  });
+});
 
 async function loadWalk(name: string): Promise<WalkResult> {
   const path = resolve(RECIPES_DIR, `${name}.json`);

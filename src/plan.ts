@@ -198,7 +198,7 @@ export async function resolvePlan(
       .flatMap((tf) => tf.runtimeVars ?? []),
   );
   const envVarsForOperator = envVars.filter((v) => !runtimeOnlyVars.has(v.name));
-  const required = deriveRequiredVars(envVarsForOperator, sources, sidecarSecretNames);
+  const required = deriveRequiredVars(envVarsForOperator, sources, sidecarSecretNames, walks);
   let envFileValues: Record<string, string> = {};
   if (opts.envFile) {
     try {

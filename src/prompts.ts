@@ -8,7 +8,7 @@
  * --no-prompts mode: scan process.env (and optionally an env-file), throw
  * on any missing required value.  No interactive output.
  *
- * The "always required" list is intentionally short:
+ * The implicit provider requirement is intentionally short:
  *   - the Anthropic credential (membrane reads it directly from process.env):
  *     ANTHROPIC_API_KEY, satisfiable by the ANTHROPIC_AUTH_TOKEN alternative
  *     (long-lived OAuth bearer; connectome-host prefers it when both are set)
@@ -19,7 +19,14 @@
 
 import promptsLib from 'prompts';
 import { existsSync, readFileSync } from 'node:fs';
-import type { EnvVar, McpSource } from './types.js';
+import type { EnvVar, McpSource, WalkResult } from './types.js';
+
+/** Only an explicitly Codex-only tree is known to need no Anthropic auth.
+ * Omitted providers default to Anthropic at runtime; unknown routes and an
+ * absent tree retain the existing requirement conservatively. */
+export function requiresAnthropicCredential(walks: WalkResult[]): boolean {
+  return walks.length === 0 || walks.some((walk) => walk.recipe.agent.provider !== 'openai-codex');
+}
 
 /** A variable cook needs a value for. */
 export interface RequiredVar {
@@ -56,7 +63,7 @@ export interface PromptResult {
 
 /** Build the list of variables that need a value, deduped by name.
  *  Includes:
- *    - ANTHROPIC_API_KEY (always; membrane reads from process.env), with
+ *    - ANTHROPIC_API_KEY (unless the tree is explicitly Codex-only), with
  *      ANTHROPIC_AUTH_TOKEN as an accepted alternative (altNames)
  *    - every envVar (recipe `${VAR}`)
  *    - every authSecret across sources (clone-time)
@@ -72,8 +79,9 @@ export function deriveRequiredVars(
   envVars: EnvVar[],
   sources: McpSource[],
   sidecarSecretNames: string[] = [],
+  walks: WalkResult[] = [],
 ): RequiredVar[] {
-  const out: RequiredVar[] = [
+  const out: RequiredVar[] = requiresAnthropicCredential(walks) ? [
     {
       name: 'ANTHROPIC_API_KEY',
       consumer: 'Anthropic SDK (membrane)',
@@ -83,7 +91,7 @@ export function deriveRequiredVars(
       // (and prefers the auth token when both are set).
       altNames: ['ANTHROPIC_AUTH_TOKEN'],
     },
-  ];
+  ] : [];
   for (const v of envVars) {
     const consumer = v.usedIn[0]
       ? `${v.usedIn[0].recipePath.split('/').pop()}:${v.usedIn[0].jsonPath}`
