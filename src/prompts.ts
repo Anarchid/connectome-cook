@@ -23,9 +23,22 @@ import type { EnvVar, McpSource, WalkResult } from './types.js';
 
 /** Only an explicitly Codex-only tree is known to need no Anthropic auth.
  * Omitted providers default to Anthropic at runtime; unknown routes and an
- * absent tree retain the existing requirement conservatively. */
+ * absent tree retain the existing requirement conservatively. Fleets that can
+ * launch unwalked recipes also retain it; their providers are unknown. */
 export function requiresAnthropicCredential(walks: WalkResult[]): boolean {
-  return walks.length === 0 || walks.some((walk) => walk.recipe.agent.provider !== 'openai-codex');
+  return walks.length === 0 || walks.some((walk) => {
+    if (walk.recipe.agent.provider !== 'openai-codex') return true;
+    const fleet = walk.recipe.modules?.fleet;
+    if (!fleet) return false;
+    if (fleet === true) return true;
+    const children = fleet.children ?? [];
+    // Host disables its allowlist when neither explicit entries nor children
+    // exist. Extra entries (including wildcards) permit unwalked providers.
+    if (children.length === 0 && fleet.allowedRecipes === undefined) return true;
+    return (fleet.allowedRecipes ?? []).some((entry) =>
+      entry.includes('*') || !children.some((child) => child.recipe === entry),
+    );
+  });
 }
 
 /** A variable cook needs a value for. */

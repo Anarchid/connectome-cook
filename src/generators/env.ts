@@ -257,6 +257,12 @@ function buildNotesSection(input: GeneratorInput): string[] {
     '#   for simple values) are picked up by docker-compose at container start.',
   );
 
+  if (input.walks.some((walk) => walk.recipe.agent.provider === 'openai-codex')) {
+    lines.push('# - Codex inference requires a codex executable on PATH, writable persistent CODEX_HOME,');
+    lines.push('#   and codex login in the runtime environment. This bundle does not supply these prerequisites.');
+    lines.push('#   Setting env values alone does not enable Codex inference.');
+  }
+
   // Per the design notes / example: if a recipe references GitLab, mention
   // the opt-out path. Detected by env-var presence, not by recipe scanning,
   // so we don't depend on having a richer source-detector view.

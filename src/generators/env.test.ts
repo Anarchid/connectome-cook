@@ -90,7 +90,20 @@ describe('provider auth — planner and generated env', () => {
       if (!result.ok) throw new Error('plan failed');
       const plan = result.plan;
       const out = generateEnv({ walks: plan.walks, sources: plan.sources, envVars: plan.envVars, options: DEFAULT_OPTIONS });
-      return { out, warnings: warn.mock.calls.map(([message]) => message), plan };
+      const allWarnings = warn.mock.calls.map(([message]) => message);
+      const codexWarnings = allWarnings.filter(message => message.startsWith('Codex inference requires'));
+      if (plan.walks.some(walk => walk.recipe.agent.provider === 'openai-codex')) {
+        expect(codexWarnings).toHaveLength(1);
+        expect(codexWarnings[0]).toContain('codex executable on PATH');
+        expect(codexWarnings[0]).toContain('writable persistent CODEX_HOME');
+        expect(codexWarnings[0]).toContain('codex login');
+        expect(codexWarnings[0]).toContain('does not supply');
+      } else {
+        expect(codexWarnings).toEqual([]);
+      }
+      // Keep credential/missing-value assertions independent of the added
+      // inference prerequisite warning; all other warnings remain visible.
+      return { out, warnings: allWarnings.filter(message => !message.startsWith('Codex inference requires')), plan };
     } finally {
       warn.mockRestore();
       rmSync(dir, { recursive: true, force: true });
