@@ -86,6 +86,7 @@ export interface RecipeExtension {
 
 export interface RecipeAgent {
   name?: string;
+  provider?: string;
   model?: string;
   systemPrompt: string;
   maxTokens?: number;
